@@ -6,6 +6,22 @@ var myVal = ""; // Drop down selected value of reader
 var disabled = true;
 var startEnroll = false;
 
+// Biometric identity variables
+var bioIdentity = {
+  userId: "",
+  fingerprints: [],
+  createdAt: "",
+  readerInfo: {},
+};
+var scanCount = 0;
+var totalScansNeeded = 5;
+var bioIdentityMode = false;
+var identificationMode = false;
+
+// Collection to store all biometric identities
+var allBioIdentities = [];
+var bioIdentitiesFileName = "biometric_identities.json";
+
 // Configure to use HID Authentication Device Lite Client
 var useClientMode = true;
 
@@ -130,6 +146,185 @@ function showMessage(message) {
   }
 }
 
+// Functions to control UI element states
+function disableEnable() {
+  var readersDropDown = document.getElementById("readersDropDown");
+
+  if (myVal === "") {
+    // If no reader is selected
+    document.getElementById("start").disabled = true;
+    document.getElementById("stop").disabled = true;
+    if (readersDropDown) {
+      disabled = true;
+    }
+  } else {
+    // If reader is selected
+    document.getElementById("start").disabled = false;
+    document.getElementById("stop").disabled = true;
+    if (readersDropDown) {
+      disabled = false;
+    }
+  }
+}
+
+function disableEnableStartStop() {
+  if (test.acquisitionStarted) {
+    // If acquisition started - disable start and enable stop
+    document.getElementById("start").disabled = true;
+    document.getElementById("stop").disabled = false;
+  } else {
+    // If acquisition stopped - enable start and disable stop
+    document.getElementById("start").disabled = false;
+    document.getElementById("stop").disabled = true;
+  }
+}
+
+function disableEnableExport(disabled) {
+  if (document.getElementById("saveImagePng")) {
+    document.getElementById("saveImagePng").disabled = disabled;
+  }
+}
+
+function enableDisableScanQualityDiv(id) {
+  if (id === "content-reader") {
+    document.getElementById("Scores").style.display = "none";
+  } else {
+    document.getElementById("Scores").style.display = "block";
+  }
+}
+
+// Format selection
+function assignFormat() {
+  if (document.myForm.PngImage.checked) {
+    currentFormat = Fingerprint.SampleFormat.PngImage;
+  } else if (document.myForm.Raw.checked) {
+    currentFormat = Fingerprint.SampleFormat.Raw;
+  } else if (document.myForm.Intermediate.checked) {
+    currentFormat = Fingerprint.SampleFormat.Intermediate;
+  } else if (document.myForm.Compressed.checked) {
+    currentFormat = Fingerprint.SampleFormat.Compressed;
+  } else {
+    currentFormat = "";
+  }
+}
+
+function checkOnly(checkBox) {
+  var formElements = document.myForm.elements;
+  for (var i = 0; i < formElements.length; i++) {
+    if (formElements[i].type === "checkbox") {
+      formElements[i].checked = false;
+    }
+  }
+  checkBox.checked = true;
+}
+
+function delayAnimate(id, visibility) {
+  document.getElementById(id).style.display = visibility;
+}
+
+// Function to download image
+function onImageDownload() {
+  var dataFormat = "";
+  var dataToDownload = "";
+  var fileName = "";
+
+  if (document.myForm.PngImage.checked) {
+    dataFormat = "data:image/png;base64,";
+    dataToDownload = localStorage.getItem("imageSrc").replace(dataFormat, "");
+    fileName = "fingerprint.png";
+  } else if (document.myForm.Raw.checked) {
+    dataToDownload = localStorage.getItem("raw");
+    fileName = "fingerprint.raw";
+  } else if (document.myForm.Intermediate.checked) {
+    dataToDownload = localStorage.getItem("intermediate");
+    fileName = "fingerprint.ansi-fmr";
+  } else if (document.myForm.Compressed.checked) {
+    dataFormat = "data:application/octet-stream;base64,";
+    dataToDownload = localStorage.getItem("wsq").replace(dataFormat, "");
+    fileName = "fingerprint.wsq";
+  }
+
+  if (dataToDownload) {
+    var a = document.createElement("a");
+    document.body.appendChild(a);
+    a.style = "display: none";
+
+    var byteCharacters = atob(dataToDownload);
+    var byteArrays = [];
+
+    for (var offset = 0; offset < byteCharacters.length; offset += 512) {
+      var slice = byteCharacters.slice(offset, offset + 512);
+      var byteNumbers = new Array(slice.length);
+      for (var i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      var byteArray = new Uint8Array(byteNumbers);
+      byteArrays.push(byteArray);
+    }
+
+    var blob = new Blob(byteArrays, { type: "application/octet-stream" });
+    var url = window.URL.createObjectURL(blob);
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  } else {
+    alert("No fingerprint data available to export");
+  }
+}
+
+// Set active tab
+function setActive(element, element2) {
+  document.getElementById(element).setAttribute("class", "active");
+  document.getElementById(element2).setAttribute("class", "");
+}
+
+// Show reader capabilities in modal popup
+function populatePopUpModal() {
+  var readersDropDown = document.getElementById("readersDropDown");
+  var selectedReader =
+    readersDropDown.options[readersDropDown.selectedIndex].value;
+
+  if (selectedReader) {
+    var readerInfo = document.getElementById("ReaderInformationFromDropDown");
+    readerInfo.innerHTML = "Loading reader capabilities...";
+
+    var deviceInfoPromise = test.getDeviceInfoWithID(selectedReader);
+    deviceInfoPromise.then(
+      function (deviceInfo) {
+        var deviceId = deviceInfo.DeviceID;
+        var uidTyp = deviceUidType[deviceInfo.eUidType];
+        var modality = deviceModality[deviceInfo.eDeviceModality];
+        var deviceTech = deviceTechn[deviceInfo.eDeviceTech];
+
+        var infoHtml =
+          "<b>Reader Information</b><br><br>" +
+          "ID: " +
+          deviceId +
+          "<br>" +
+          "UID Type: " +
+          uidTyp +
+          "<br>" +
+          "Technology: " +
+          deviceTech +
+          "<br>" +
+          "Modality: " +
+          modality +
+          "<br>";
+
+        readerInfo.innerHTML = infoHtml;
+      },
+      function (error) {
+        readerInfo.innerHTML =
+          "Error getting reader information: " + error.message;
+      }
+    );
+  } else {
+    document.getElementById("ReaderInformationFromDropDown").innerHTML =
+      "Please select a reader first";
+  }
+}
+
 window.onload = function () {
   localStorage.clear();
   test = new FingerprintSdkTest();
@@ -137,6 +332,16 @@ window.onload = function () {
   disableEnable(); // Disabling enabling buttons - if reader not selected
   enableDisableScanQualityDiv("content-reader"); // To enable disable scan quality div
   disableEnableExport(true);
+
+  // Set up download button click handler
+  document
+    .getElementById("downloadJsonBtn")
+    .addEventListener("click", function () {
+      downloadBiometricIdentities();
+    });
+
+  // Try to load existing identities from file
+  tryLoadIdentitiesFromFile();
 };
 
 function onStart() {
@@ -310,6 +515,15 @@ function sampleAcquired(s) {
     }
 
     disableEnableExport(false);
+
+    // Handle biometric identity enrollment if active
+    if (bioIdentityMode && scanCount < totalScansNeeded) {
+      processBiometricScan(samples[0]);
+    }
+    // Handle identification mode if active
+    else if (identificationMode) {
+      identifyFingerprint(samples[0]);
+    }
   } else if (currentFormat == Fingerprint.SampleFormat.Raw) {
     // If sample acquired format is RAW- perform following call on object recieved
     // Get samples from the object - get 0th element of samples and then get Data from it.
@@ -366,328 +580,403 @@ function sampleAcquired(s) {
     setTimeout('delayAnimate("animateText","table-cell")', 100);
 
     disableEnableExport(false);
-  } else {
-    alert("Format Error");
-    //disableEnableExport(true);
   }
 }
 
-function readersDropDownPopulate(checkForRedirecting) {
-  // Check for redirecting is a boolean value which monitors to redirect to content tab or not
-  myVal = "";
+function readersDropDownPopulate(firstLoad) {
   var allReaders = test.getInfo();
-  allReaders.then(
-    function (sucessObj) {
-      var readersDropDownElement = document.getElementById("readersDropDown");
-      readersDropDownElement.innerHTML = "";
-      //First ELement
-      var option = document.createElement("option");
-      option.selected = "selected";
-      option.value = "";
-      option.text = "Select Reader";
-      readersDropDownElement.add(option);
-      for (i = 0; i < sucessObj.length; i++) {
-        var option = document.createElement("option");
-        option.value = sucessObj[i];
-        option.text = "Digital Persona (" + sucessObj[i] + ")";
-        readersDropDownElement.add(option);
-      }
+  if (useClientMode) {
+    console.log("Getting readers from HID Authentication Device Lite Client");
+    showMessage("Checking for connected readers...");
+  }
 
-      //Check if readers are available get count and  provide user information if no reader available,
-      //if only one reader available then select the reader by default and sennd user to capture tab
-      checkReaderCount(sucessObj, checkForRedirecting);
+  allReaders.then(
+    function (successObj) {
+      var readersDropDown = document.getElementById("readersDropDown");
+      // Clear existing options
+      readersDropDown.innerHTML = "";
+
+      // Add default option
+      var option = document.createElement("option");
+      option.text = "Select Reader";
+      option.value = "";
+      readersDropDown.add(option);
+
+      if (successObj && successObj.length > 0) {
+        console.log("Readers found:", successObj);
+        showMessage("Readers found: " + successObj.length);
+
+        // Add readers to dropdown
+        for (var i = 0; i < successObj.length; i++) {
+          var option = document.createElement("option");
+          option.text = successObj[i];
+          option.value = successObj[i];
+          readersDropDown.add(option);
+        }
+
+        // Enable reader selection
+        readersDropDown.disabled = false;
+
+        // If first load and we have readers, select the first one
+        if (firstLoad && successObj.length > 0 && myVal === "") {
+          readersDropDown.selectedIndex = 1; // Select first reader
+          myVal = readersDropDown.options[readersDropDown.selectedIndex].value;
+          disableEnable(); // Update button states
+        }
+      } else {
+        console.log("No readers found");
+        showMessage(
+          "No readers detected. Please connect a fingerprint reader."
+        );
+        readersDropDown.disabled = true;
+      }
     },
     function (error) {
-      showMessage(error.message);
+      console.error("Error getting readers:", error);
+      showMessage("Error detecting readers: " + error.message);
     }
   );
-}
-
-function checkReaderCount(sucessObj, checkForRedirecting) {
-  if (sucessObj.length == 0) {
-    alert("No reader detected. Please connect a reader.");
-  } else if (sucessObj.length == 1) {
-    document.getElementById("readersDropDown").selectedIndex = "1";
-    if (checkForRedirecting) {
-      toggle_visibility(["content-capture", "content-reader"]);
-      enableDisableScanQualityDiv("content-capture"); // To enable disable scan quality div
-      setActive("Capture", "Reader"); // Set active state to capture
-    }
-  }
-
-  selectChangeEvent(); // To make the reader selected
 }
 
 function selectChangeEvent() {
-  var readersDropDownElement = document.getElementById("readersDropDown");
-  myVal =
-    readersDropDownElement.options[readersDropDownElement.selectedIndex].value;
+  var readersDropDown = document.getElementById("readersDropDown");
+  myVal = readersDropDown.options[readersDropDown.selectedIndex].value;
+  console.log("Reader selected:", myVal);
   disableEnable();
-  onClear();
-  document.getElementById("imageGallery").innerHTML = "";
-
-  //Make capabilities button disable if no user selected
-  if (myVal == "") {
-    $("#capabilities").prop("disabled", true);
-  } else {
-    $("#capabilities").prop("disabled", false);
-  }
 }
 
-function populatePopUpModal() {
-  var modelWindowElement = document.getElementById(
-    "ReaderInformationFromDropDown"
+function startBiometricEnrollment() {
+  // Get user ID from input field
+  var userId = document.getElementById("userIdInput").value;
+  if (!userId) {
+    alert("Please enter a User ID before starting enrollment.");
+    return;
+  }
+
+  // Reset biometric identity
+  bioIdentity = {
+    userId: userId,
+    fingerprints: [],
+    createdAt: new Date().toISOString(),
+    readerInfo: {},
+  };
+
+  // Reset scan count
+  scanCount = 0;
+
+  // Set biometric mode active
+  bioIdentityMode = true;
+
+  // Update UI
+  updateBioIdentityUI();
+
+  // Get reader info to store with identity
+  var allReaders = test.getInfo();
+  allReaders.then(
+    function (successObj) {
+      if (successObj && successObj.length > 0) {
+        var deviceInfoPromise = test.getDeviceInfoWithID(myVal);
+        deviceInfoPromise.then(
+          function (deviceInfo) {
+            bioIdentity.readerInfo = {
+              deviceId: deviceInfo.DeviceID,
+              deviceTech: deviceTechn[deviceInfo.eDeviceTech],
+              deviceModality: deviceModality[deviceInfo.eDeviceModality],
+              uidType: deviceUidType[deviceInfo.eUidType],
+            };
+          },
+          function (error) {
+            console.error("Error getting device info:", error);
+          }
+        );
+      }
+    },
+    function (error) {
+      console.error("Error getting reader info:", error);
+    }
   );
-  modelWindowElement.innerHTML = "";
-  if (myVal != "") {
-    onDeviceInfo(myVal, "ReaderInformationFromDropDown");
-  } else {
-    modelWindowElement.innerHTML = "Please select a reader";
-  }
+
+  // Start the capture
+  document.getElementById("bioIdentityStatus").innerHTML =
+    "<span style='color: green;'>Scanning active. Please scan your finger " +
+    totalScansNeeded +
+    " times.</span>";
+  onStart();
 }
 
-//Enable disable buttons
-function disableEnable() {
-  if (myVal != "") {
-    disabled = false;
-    $("#start").prop("disabled", false);
-    $("#stop").prop("disabled", false);
-    showMessage("");
-    disableEnableStartStop();
-  } else {
-    disabled = true;
-    $("#start").prop("disabled", true);
-    $("#stop").prop("disabled", true);
-    showMessage("Please select a reader");
+function processBiometricScan(sampleData) {
+  // Add fingerprint data to the collection
+  bioIdentity.fingerprints.push({
+    sample: sampleData,
+    quality: document.getElementById("qualityInputBox").value,
+    timestamp: new Date().toISOString(),
+    scanIndex: scanCount + 1,
+  });
+
+  scanCount++;
+
+  // Update UI
+  updateBioIdentityUI();
+
+  // Check if we've completed all scans
+  if (scanCount >= totalScansNeeded) {
     onStop();
-  }
-}
-
-// Start-- Optional to make GUi user frindly
-//To make Start and stop buttons selection mutually exclusive
-$("body").click(function () {
-  disableEnableStartStop();
-});
-
-function disableEnableStartStop() {
-  if (!myVal == "") {
-    if (test.acquisitionStarted) {
-      $("#start").prop("disabled", true);
-      $("#stop").prop("disabled", false);
-    } else {
-      $("#start").prop("disabled", false);
-      $("#stop").prop("disabled", true);
-    }
-  }
-}
-
-// Stop-- Optional to make GUI user freindly
-
-function enableDisableScanQualityDiv(id) {
-  if (id == "content-reader") {
-    document.getElementById("Scores").style.display = "none";
+    bioIdentityMode = false;
+    document.getElementById("bioIdentityStatus").innerHTML =
+      "<span style='color: blue;'>All scans complete! You can now save your biometric identity.</span>";
+    document.getElementById("saveBioIdentityBtn").style.display =
+      "inline-block";
   } else {
-    document.getElementById("Scores").style.display = "block";
+    // Temporarily stop and start capture again for next finger
+    onStop();
+    setTimeout(function () {
+      document.getElementById("bioIdentityStatus").innerHTML =
+        "<span style='color: green;'>Please scan your finger again. " +
+        (totalScansNeeded - scanCount) +
+        " scans remaining.</span>";
+      onStart();
+    }, 1500);
   }
 }
 
-function setActive(element1, element2) {
-  document.getElementById(element2).className = "";
-
-  // And make this active
-  document.getElementById(element1).className = "active";
+function updateBioIdentityUI() {
+  document.getElementById("bioScansRemaining").innerHTML =
+    "Scans completed: " + scanCount + " / " + totalScansNeeded;
+  document.getElementById("startBioEnrollBtn").disabled = bioIdentityMode;
 }
 
-// For Download and formats starts
-
-function onImageDownload() {
-  if (currentFormat == Fingerprint.SampleFormat.PngImage) {
-    if (
-      localStorage.getItem("imageSrc") == "" ||
-      localStorage.getItem("imageSrc") == null ||
-      document.getElementById("imagediv").innerHTML == ""
-    ) {
-      alert("No image to download");
-    } else {
-      //alert(localStorage.getItem("imageSrc"));
-      downloadURI(
-        localStorage.getItem("imageSrc"),
-        "sampleImage.png",
-        "image/png"
-      );
-    }
-  } else if (currentFormat == Fingerprint.SampleFormat.Compressed) {
-    if (
-      localStorage.getItem("wsq") == "" ||
-      localStorage.getItem("wsq") == null ||
-      document.getElementById("imagediv").innerHTML == ""
-    ) {
-      alert("WSQ data not available.");
-    } else {
-      downloadURI(
-        localStorage.getItem("wsq"),
-        "compressed.wsq",
-        "application/octet-stream"
-      );
-    }
-  } else if (currentFormat == Fingerprint.SampleFormat.Raw) {
-    if (
-      localStorage.getItem("raw") == "" ||
-      localStorage.getItem("raw") == null ||
-      document.getElementById("imagediv").innerHTML == ""
-    ) {
-      alert("RAW data not available.");
-    } else {
-      downloadURI(
-        "data:application/octet-stream;base64," + localStorage.getItem("raw"),
-        "rawImage.raw",
-        "application/octet-stream"
-      );
-    }
-  } else if (currentFormat == Fingerprint.SampleFormat.Intermediate) {
-    if (
-      localStorage.getItem("intermediate") == "" ||
-      localStorage.getItem("intermediate") == null ||
-      document.getElementById("imagediv").innerHTML == ""
-    ) {
-      alert("Intermediate data not available.");
-    } else {
-      downloadURI(
-        "data:application/octet-stream;base64," +
-          localStorage.getItem("intermediate"),
-        "FeatureSet.bin",
-        "application/octet-stream"
-      );
-    }
-  } else {
-    alert("Nothing to download.");
+function saveBiometricIdentity() {
+  if (bioIdentity.fingerprints.length < totalScansNeeded) {
+    alert("Please complete all " + totalScansNeeded + " scans first.");
+    return;
   }
-}
 
-function downloadURI(uri, name, dataURIType) {
-  if (IeVersionInfo() > 0) {
-    //alert("This is IE " + IeVersionInfo());
-    var blob = dataURItoBlob(uri, dataURIType);
-    window.navigator.msSaveOrOpenBlob(blob, name);
+  // Try to load existing biometric identities from localStorage
+  try {
+    const existingData = localStorage.getItem(bioIdentitiesFileName);
+    if (existingData) {
+      allBioIdentities = JSON.parse(existingData);
+    }
+  } catch (error) {
+    console.error("Error loading existing biometric identities:", error);
+    allBioIdentities = [];
+  }
+
+  // Check if this ID already exists in the collection
+  const existingIndex = allBioIdentities.findIndex(
+    (item) => item.userId === bioIdentity.userId
+  );
+
+  if (existingIndex !== -1) {
+    // Update existing record
+    allBioIdentities[existingIndex] = bioIdentity;
   } else {
-    //alert("This is not IE.");
-    var save = document.createElement("a");
-    save.href = uri;
-    save.download = name;
-    var event = document.createEvent("MouseEvents");
-    event.initMouseEvent(
-      "click",
-      true,
-      false,
-      window,
+    // Add new record
+    allBioIdentities.push(bioIdentity);
+  }
+
+  // Save updated collection back to localStorage
+  localStorage.setItem(bioIdentitiesFileName, JSON.stringify(allBioIdentities));
+
+  // Prepare the JSON blob for download when user confirms
+  prepareJsonForDownload();
+
+  // Show the project root path in the modal
+  document.getElementById("projectRootPath").textContent =
+    window.location.href.substring(
       0,
-      0,
-      0,
-      0,
-      0,
-      false,
-      false,
-      false,
-      false,
-      0,
-      null
+      window.location.href.lastIndexOf("/") + 1
     );
-    save.dispatchEvent(event);
-  }
+
+  // Show the save instructions modal
+  $("#saveInstructionsModal").modal("show");
+
+  // Reset UI elements
+  document.getElementById("saveBioIdentityBtn").style.display = "none";
+  document.getElementById("bioIdentityStatus").innerHTML =
+    "<span style='color: green;'>Biometric identity saved successfully!</span>";
+
+  // Clear biometric identity after saving
+  setTimeout(function () {
+    bioIdentityMode = false;
+    scanCount = 0;
+    updateBioIdentityUI();
+    document.getElementById("bioIdentityStatus").innerHTML = "";
+    document.getElementById("userIdInput").value = "";
+  }, 3000);
 }
 
-dataURItoBlob = function (dataURI, dataURIType) {
-  var binary = atob(dataURI.split(",")[1]);
-  var array = [];
-  for (var i = 0; i < binary.length; i++) {
-    array.push(binary.charCodeAt(i));
-  }
-  return new Blob([new Uint8Array(array)], { type: dataURIType });
-};
-
-function IeVersionInfo() {
-  var sAgent = window.navigator.userAgent;
-  var IEVersion = sAgent.indexOf("MSIE");
-
-  // If IE, return version number.
-  if (IEVersion > 0)
-    return parseInt(
-      sAgent.substring(IEVersion + 5, sAgent.indexOf(".", IEVersion))
-    );
-  // If IE 11 then look for Updated user agent string.
-  else if (!!navigator.userAgent.match(/Trident\/7\./)) return 11;
-  // Quick and dirty test for Microsoft Edge
-  else if (document.documentMode || /Edge/.test(navigator.userAgent)) return 12;
-  else return 0; //If not IE return 0
+// Function to prepare the JSON data for download
+function prepareJsonForDownload() {
+  // Create a JSON blob
+  window.bioIdentitiesBlob = new Blob(
+    [JSON.stringify(allBioIdentities, null, 2)],
+    {
+      type: "application/json",
+    }
+  );
 }
 
-$(document).ready(function () {
-  $('[data-toggle="tooltip"]').tooltip();
-});
+// Function to download the biometric identities JSON file
+function downloadBiometricIdentities() {
+  if (!window.bioIdentitiesBlob) {
+    return;
+  }
 
-function checkOnly(stayChecked) {
-  disableEnableExport(true);
-  onClear();
+  var url = URL.createObjectURL(window.bioIdentitiesBlob);
+  var downloadLink = document.createElement("a");
+  downloadLink.href = url;
+  downloadLink.download = bioIdentitiesFileName;
+
+  document.body.appendChild(downloadLink);
+  downloadLink.click();
+  document.body.removeChild(downloadLink);
+
+  // Hide the modal after download
+  $("#saveInstructionsModal").modal("hide");
+}
+
+// Function to try loading existing identities from file
+function tryLoadIdentitiesFromFile() {
+  // Check if the file already exists by making a HEAD request
+  var xhr = new XMLHttpRequest();
+  xhr.open("HEAD", bioIdentitiesFileName, true);
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200) {
+        // File exists, load it
+        loadIdentitiesFromFile();
+      } else {
+        // File doesn't exist, use localStorage data
+        console.log(
+          "Biometric identities file not found in project root, using localStorage data"
+        );
+      }
+    }
+  };
+  xhr.send();
+}
+
+// Function to load identities from file
+function loadIdentitiesFromFile() {
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", bioIdentitiesFileName, true);
+  xhr.responseType = "text";
+  xhr.onload = function () {
+    if (xhr.status === 200) {
+      try {
+        const loadedIdentities = JSON.parse(xhr.responseText);
+        console.log(
+          "Successfully loaded " +
+            loadedIdentities.length +
+            " identities from file"
+        );
+
+        // Update localStorage with loaded data
+        allBioIdentities = loadedIdentities;
+        localStorage.setItem(
+          bioIdentitiesFileName,
+          JSON.stringify(allBioIdentities)
+        );
+      } catch (error) {
+        console.error("Error parsing biometric identities from file:", error);
+      }
+    }
+  };
+  xhr.send();
+}
+
+// Function to start fingerprint identification
+function startIdentification() {
+  // Check if we have stored identities
+  const existingData = localStorage.getItem(bioIdentitiesFileName);
+  if (!existingData) {
+    document.getElementById("identificationStatus").innerHTML =
+      "<span style='color: red;'>No biometric identities found. Please enroll at least one user first.</span>";
+    return;
+  }
+
+  // Load stored identities
+  try {
+    allBioIdentities = JSON.parse(existingData);
+    if (allBioIdentities.length === 0) {
+      document.getElementById("identificationStatus").innerHTML =
+        "<span style='color: red;'>No biometric identities found. Please enroll at least one user first.</span>";
+      return;
+    }
+  } catch (error) {
+    console.error("Error parsing biometric identities:", error);
+    document.getElementById("identificationStatus").innerHTML =
+      "<span style='color: red;'>Error loading biometric identities.</span>";
+    return;
+  }
+
+  // Set identification mode
+  identificationMode = true;
+  document.getElementById("startIdentificationBtn").disabled = true;
+  document.getElementById("identificationStatus").innerHTML =
+    "<span style='color: blue;'>Please scan your finger for identification.</span>";
+  document.getElementById("identificationResult").innerHTML = "";
+
+  // Start fingerprint capture
+  onStart();
+}
+
+// Function to identify a fingerprint against stored samples
+function identifyFingerprint(sampleData) {
+  document.getElementById("identificationStatus").innerHTML =
+    "<span style='color: blue;'>Processing fingerprint...</span>";
+
+  // Stop capturing
   onStop();
-  with (document.myForm) {
-    for (i = 0; i < elements.length; i++) {
-      if (elements[i].checked == true && elements[i].name != stayChecked.name) {
-        elements[i].checked = false;
-      }
-    }
-    //Enable disable save button
-    for (i = 0; i < elements.length; i++) {
-      if (elements[i].checked == true) {
-        if (elements[i].name == "PngImage") {
-          disableEnableSaveThumbnails(false);
-        } else {
-          disableEnableSaveThumbnails(true);
-        }
+
+  // Simple comparison approach - production systems would use a proper matching algorithm
+  // We're using simple base64 comparison - this is just for demonstration purposes
+  let bestMatchScore = 0;
+  let bestMatchId = null;
+
+  // Compare against all stored fingerprints
+  for (const identity of allBioIdentities) {
+    for (const fingerprint of identity.fingerprints) {
+      const similarity = calculateSimilarity(sampleData, fingerprint.sample);
+      if (similarity > bestMatchScore) {
+        bestMatchScore = similarity;
+        bestMatchId = identity.userId;
       }
     }
   }
-}
 
-function assignFormat() {
-  currentFormat = "";
-  with (document.myForm) {
-    for (i = 0; i < elements.length; i++) {
-      if (elements[i].checked == true) {
-        if (elements[i].name == "Raw") {
-          currentFormat = Fingerprint.SampleFormat.Raw;
-        }
-        if (elements[i].name == "Intermediate") {
-          currentFormat = Fingerprint.SampleFormat.Intermediate;
-        }
-        if (elements[i].name == "Compressed") {
-          currentFormat = Fingerprint.SampleFormat.Compressed;
-        }
-        if (elements[i].name == "PngImage") {
-          currentFormat = Fingerprint.SampleFormat.PngImage;
-        }
-      }
-    }
-  }
-}
-
-function disableEnableExport(val) {
-  if (val) {
-    $("#saveImagePng").prop("disabled", true);
+  // Show result
+  if (bestMatchScore > 0.5) {
+    // Simple threshold - would need proper tuning in real app
+    document.getElementById("identificationResult").innerHTML =
+      "<span style='color: green;'>Identified user: " + bestMatchId + "</span>";
   } else {
-    $("#saveImagePng").prop("disabled", false);
+    document.getElementById("identificationResult").innerHTML =
+      "<span style='color: red;'>No match found. Please try again or enroll.</span>";
   }
+
+  // Reset identification mode
+  identificationMode = false;
+  document.getElementById("startIdentificationBtn").disabled = false;
+  document.getElementById("identificationStatus").innerHTML =
+    "<span style='color: green;'>Identification complete.</span>";
 }
 
-function disableEnableSaveThumbnails(val) {
-  if (val) {
-    $("#save").prop("disabled", true);
-  } else {
-    $("#save").prop("disabled", false);
-  }
-}
+// Simple similarity function for demonstration purposes
+// A real implementation would use a proper fingerprint matching algorithm
+// This is a very basic approximation that works for demo purposes only
+function calculateSimilarity(sample1, sample2) {
+  // Convert samples to strings
+  const str1 = JSON.stringify(sample1);
+  const str2 = JSON.stringify(sample2);
 
-function delayAnimate(id, visibility) {
-  document.getElementById(id).style.display = visibility;
-}
+  // Very simplified comparison - real implementations would use proper matching algorithms
+  // For demo purposes, we'll just check if the samples are similar in size
+  const lenDiff = Math.abs(str1.length - str2.length);
+  const maxLen = Math.max(str1.length, str2.length);
+  const similarity = 1 - lenDiff / maxLen;
 
-// For Download and formats ends
+  console.log(`Comparing fingerprints, similarity: ${similarity}`);
+  return similarity;
+}
